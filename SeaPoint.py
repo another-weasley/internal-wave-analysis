@@ -6,20 +6,42 @@ from matplotlib import cm
 from matplotlib.ticker import LinearLocator
 import gsw
 import math
-from functools import lru_cache
 import seaborn as sns
 import statistics as stat
 import scipy.stats
+from scipy import interpolate
+from scipy import fft
+from scipy import signal
+from scipy.ndimage import gaussian_filter
+import pandas
+from scipy.stats import lognorm
+from scipy.optimize import curve_fit
+from Wave import Wave
 
-class Wave:
-    def __init__(self, min1, max, min2, T):
-        self.min1 = min1
-        self.max = max
-        self.min2 = min2
-        self.T = T * 10 / 60 # т.е. в минутах
+matplotlib.rcParams['font.family'] = 'serif'
+plt.rc('font', size=20)
+LATITUDE = 42
+LONGITUDE = 131
 
-    def height(self):
-        return (2*self.max - self.min1 - self.min2) / 2
+WOA_SALINITY = {5: 33.035, 10: 33.292, 15: 33.363, 20: 33.435, 25: 33.492, 30: 33.532, 35: 33.590, 40: 33.641,
+                45: 33.712, 50: 33.761, 55: 33.830, 60: 33.868, 65: 33.902, 70: 33.929, 75: 33.954, 80: 33.983,
+                85: 33.995, 90: 34.003, 95: 34.012, 100: 34.018}
+
+FIXED_VALUES = {'S02': None, 'S04': 1024.5}
+
+MINUTES = 20160
+
+
+def show_salinity_profile():
+    keys = np.array(list(WOA_SALINITY.keys()))
+    values = np.array(list(WOA_SALINITY.values()))
+    plt.gca().invert_yaxis()
+    plt.plot(values, keys)
+    plt.title("Профиль солености")
+    plt.xlabel('S, %')
+    plt.ylabel('z, м')
+    plt.show()
+
 
 class SeaPoint:
 
@@ -33,31 +55,19 @@ class SeaPoint:
         self.temp_data = np.array(mat[temp_header])
         self.temp_data = self.temp_data.transpose()
         self.height_data = np.array(mat[height_data_header])[0]
-        self.latitude = 42
-        self.longitude = 131
+        self.latitude = LATITUDE
+        self.longitude = LONGITUDE
         self.height = mat[height_header][0][0]
+        self.measure_count = len(self.temp_data[0])
         # print(mat["cS09"])
 
-        self.salinity_woa = {5: 33.035, 10: 33.292, 15: 33.363, 20: 33.435, 25: 33.492,
-                         30: 33.532, 35: 33.590, 40: 33.641, 45: 33.712, 50: 33.761,
-                         55: 33.830, 60: 33.868, 65: 33.902, 70: 33.929, 75: 33.954,
-                         80: 33.983, 85: 33.995, 90: 34.003, 95: 34.012, 100: 34.018}
         self.salinity = []
         for h in self.height_data:
-            for key, value in self.salinity_woa.items():
+            for key, value in WOA_SALINITY.items():
                 if abs(h-key) <= 2.5:
                     self.salinity.append(value)
                     break
         self.salinity = np.array(self.salinity)
-    def show_salinity_profile(self):
-        keys = np.array(list(self.salinity_woa.keys()))
-        values = np.array(list(self.salinity_woa.values()))
-        plt.gca().invert_yaxis()
-        plt.plot(values, keys)
-        plt.title("Профиль солености")
-        plt.xlabel('S, %')
-        plt.ylabel('z, м')
-        plt.show()
 
     def show_temp(self):
         fig, ax = plt.subplots(constrained_layout=True)
@@ -81,7 +91,18 @@ class SeaPoint:
         ax.set_ylabel("z, м")
         plt.show()
 
-    @lru_cache()
+    def calc_density(self):
+        self.height_data = -1 * self.height_data  # потому что вниз, а не вверх (иначе беды с давлением)
+        pressure = gsw.p_from_z(self.height_data, self.latitude)
+        absolute_salinity = gsw.SA_from_SP(self.salinity, pressure, self.longitude, self.latitude)
+        # приведем аболютную соленость к такому же виду, в каком лежит температура (была ошибка)
+        abs_sal_arr = np.zeros((len(self.height_data), self.measure_count))
+        for i in range(0, len(self.height_data), 1):
+            abs_sal_arr[i, :] = absolute_salinity[i]
+        density_data = gsw.density.sigma0(abs_sal_arr, self.temp_data) + 1000
+
+        return density_data
+
     def show_potential_density(self):
         fig, ax = plt.subplots(constrained_layout=True)
         y = self.height_data
@@ -89,14 +110,7 @@ class SeaPoint:
         x = np.linspace(0, 14, dt)
         X, Y = np.meshgrid(x, y)
         plt.gca().invert_yaxis()
-        self.height_data = -1 * self.height_data  # потому что вниз, а не вверх (иначе беды с давлением)
-        pressure = gsw.p_from_z(self.height_data, self.latitude)
-        absolute_salinity = gsw.SA_from_SP(self.salinity, pressure, self.longitude, self.latitude)
-        # приведем аболютную соленость к такому же виду, в каком лежит температура (была ошибка)
-        abs_sal_arr = np.zeros((len(self.height_data), 120961))
-        for i in range(0, len(self.height_data), 1):
-            abs_sal_arr[i, :] = absolute_salinity[i]
-        density_data = gsw.density.sigma0(abs_sal_arr, self.temp_data) + 1000
+        density_data = self.calc_density()
         cs = ax.contourf(X, Y, density_data, cmap=plt.cm.jet)
         norm = matplotlib.colors.Normalize(vmin=cs.cvalues.min(), vmax=cs.cvalues.max())
         sm = plt.cm.ScalarMappable(norm=norm, cmap=cs.cmap)
@@ -106,123 +120,80 @@ class SeaPoint:
         ax.set_title("Потенциальная плотность")
         ax.set_xlabel("t, дни")
         ax.set_ylabel("z, м")
-        #plt.show()
+        plt.show()
 
-        # вывести начальный и конечный срез плотности
-        #print("t_0\n", density_data[:, 0])
-        #print("t_end\n", density_data[:, len(density_data[0])-1])
-        # for i in range(0, len(self.height_data)):
-        #     print(-self.height_data[i], density_data[i, 0], density_data[i, len(density_data[0])-1])
-        return density_data
-    @lru_cache()
-    def find_isopic(self):
-        value = (26.5 + 21.13) / 2
-        # goal_p = list(self.p_density[0]).index(value)
+    def calc_isopic(self):
         goal_p = 1024.5
-        isopic = list()
-
-        dens_orig = self.show_potential_density()
-        dens_arr = np.zeros((120961, len(self.height_data)))
-        for i in range(0, 120961, 1):
-            for j in range(0, len(self.height_data)):
-                dens_arr[i, j] = round(dens_orig[j, i], ndigits=3)
-
-        for i in range(0, 120961, 1):
-            h_indices = [x for x in dens_arr[i] if abs(x - goal_p) < 0.5]
-            if len(h_indices) == 0:
-                print('нет подходящих точек, нужно поменять интервал')
-            h = h_indices.index(min(h_indices, key=lambda x: abs(x-goal_p)))
-            isopic.append(self.height_data[h])
-
+        fig, ax = plt.subplots(constrained_layout=True)
+        y = self.height_data
+        dt = np.shape(self.temp_data)[1]  # число измерений
+        x = np.linspace(0, MINUTES, dt)
+        X, Y = np.meshgrid(x, y)
+        density_data = self.calc_density()
+        isopic = ax.contour(X, Y, density_data, levels=[goal_p])
         plt.clf()
-        plt.plot(np.linspace(0, 14, 120961), -np.array(isopic).transpose(), '-')
-        plt.gca().invert_yaxis()
-        plt.title("Профиль изопикны")
-        plt.xlabel('t, дни')
-        plt.ylabel('z, м')
-        # plt.show()
+
+        allpoint1 = np.array([])
+        allpoint2 = np.array([])
+        # собираем все контуры в один
+        for ii, seg in enumerate(isopic.allsegs[0]):
+            allpoint1 = np.hstack([allpoint1, np.array(seg[:, 0]).flatten()])
+            allpoint2 = np.hstack([allpoint2, np.array(seg[:, 1]).flatten()])
+        # сортируем контур по значениям температуры (чтобы не было полос)
+        points = zip(allpoint1, allpoint2)
+        points = sorted(points, key=lambda p: p[0])
+        allpoint1 = [p[0] for p in points]
+        allpoint2 = [p[1] for p in points]
+        # удаляем дубликаты из контура
+        df = pandas.DataFrame({'x': allpoint1, 'y': allpoint2})
+        df = df.drop_duplicates(subset=['x'])
+        npdf = df.to_numpy().transpose()
+        allpoint1, allpoint2 = npdf[0], npdf[1]
+        # интерполируем контур
+        x = np.linspace(0, MINUTES, MINUTES * 6)
+        isof = interpolate.interp1d(allpoint1, allpoint2, kind='linear')
+        isopic = isof(x)
+        isopic = gaussian_filter(isopic, sigma=6)
+
+        # изопикна c дискретностью 10с
         return isopic
 
-    @lru_cache()
+    def show_isopic(self):
+        isopic = self.calc_isopic()
+        gauss_iso = gaussian_filter(isopic, sigma=6)
+        x = np.linspace(0, MINUTES, MINUTES * 6)
+        plt.plot(x, isopic)
+        plt.title("Профиль изопикны")
+        plt.xlabel('t, минуты')
+        plt.ylabel('z, м')
+        plt.show()
+        return isopic
+
     def find_waves(self, isopic):
         maxes = list()
         mins = list()
         t_mins = list()
         is_min = False
         for i in range(1, len(isopic) - 1):
-            if isopic[i] < isopic[i-1] and isopic[i] < isopic[i+1] and not is_min:
+            if isopic[i] < isopic[i - 1] and isopic[i] < isopic[i + 1] and not is_min:
                 mins.append(isopic[i])
+                t_mins.append(i)
+                is_min = True
+            elif isopic[i] < isopic[i - 1] and isopic[i] < isopic[i + 1] and is_min:
+                mins.pop()
+                mins.append(isopic[i])
+                t_mins.pop()
                 t_mins.append(i)
                 is_min = True
             if isopic[i] > isopic[i - 1] and isopic[i] > isopic[i + 1] and is_min:
                 maxes.append(isopic[i])
                 is_min = False
+            elif isopic[i] > isopic[i - 1] and isopic[i] > isopic[i + 1] and not is_min:
+                maxes.pop()
+                maxes.append(isopic[i])
+                is_min = False
         waves = list()
-        print(len(maxes), len(mins))
-        for i in range(0, len(maxes)):
-            waves.append(Wave(mins[i], maxes[i], mins[i+1], t_mins[i+1] - t_mins[i]))
+        for i in range(0, len(maxes) - 1):
+            waves.append(Wave(mins[i], maxes[i], mins[i + 1], t_mins[i + 1] - t_mins[i]))
         return waves
-
-
-def mylog(x, mu = 1, sigma = 1):
-    return np.exp(-(np.log(x) - mu)**2 / (2 * sigma**2)) / (x * sigma * np.sqrt(2 * np.pi))
-
-
-def normalise_data(data):
-    freq = [data.count(value) / len(data) for value in set(data)]
-    return freq
-
-def pirson(data):
-    data = normalise_data(data)
-    x = 0
-    i = 0
-    h = 1
-
-    while x <= max(data):
-        if data[i] <= (x + h):
-            pass
-        i += 1
-
-
-
-point = SeaPoint('/home/anna/PyProjects/diploma/data/S04_10sec.mat')
-# point.show_temp()
-# point.show_salinity_profile()
-# point.show_potential_density()
-isopic = point.find_isopic()
-
-waves = point.find_waves(isopic=tuple(isopic))
-
-heigths = [wave.height() for wave in waves if wave.height() > 0]
-height_mean = stat.mean(heigths)
-height_deviation = stat.stdev(heigths)
-norm_heights = normalise_data(heigths)
-dens = mylog(np.array(sorted(list(set(heigths)))), sigma=height_deviation, mu=height_mean)
-# print(scipy.stats.chisquare(norm_heights, dens))
-print(sum(norm_heights), sum(dens), len(set(heigths)), len(dens))
-# pirson(norm_heights, dens)
-data = heigths
-print([(value, data.count(value)) for value in set(data)])
-# гистограмма высоты
-plt.clf()
-plt.hist(sorted(set(heigths)), edgecolor='black', weights=norm_heights, bins=len(set(heigths)))
-plt.plot(sorted(list(set(heigths))), dens, linewidth=2, color='r')
-plt.show()
-
-periods = [wave.T for wave in waves]
-period_mean = stat.mean(periods)
-period_deviation = stat.stdev(periods)
-norm_periods = normalise_data(periods)
-dens = mylog(np.array(sorted(list(set(periods)))), sigma=period_deviation, mu=period_mean)
-print(sum(norm_periods), sum(dens), len(set(periods)), len(dens))
-# pirson(norm_periods, dens)
-#print(scipy.stats.chisquare(norm_periods, dens))
-
-# гистограмма периода
-plt.hist(sorted(set(periods)), edgecolor='black', weights=norm_periods, bins=int(len(set(periods)) / 4))
-plt.plot(sorted(list(set(periods))), dens, linewidth=2, color='r')
-plt.show()
-
-print(scipy.stats.shapiro(np.array(heigths)))
-print(scipy.stats.shapiro(np.array(periods)))
 
