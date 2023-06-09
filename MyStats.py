@@ -19,6 +19,7 @@ class MyStat:
         self.waves = waves
         self.periods = [wave.T for wave in self.waves]
 
+
     def show_height_hist(self):
         heigths = [wave.height() for wave in self.waves if wave.height() > 0]
         height_mean = stat.mean(heigths)
@@ -32,6 +33,7 @@ class MyStat:
         print(popt)
         # dens = lognorm.pdf(sorted(heigths), s=height_deviation, scale=height_mean)
         # print(scipy.stats.chisquare(norm_heights, dens))
+
         data = heigths
         # гистограмма высоты
         plt.clf()
