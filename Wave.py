@@ -6,5 +6,6 @@ class Wave:
         self.T = T * 10 / 60 # т.е. в минутах
 
     def height(self):
-        return (2*self.max - self.min1 - self.min2) / 2
+        real_min = (self.min1 + self.min2) / 2
+        return self.max - real_min
 
