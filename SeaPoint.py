@@ -9,7 +9,7 @@ import pandas
 from Wave import Wave
 
 matplotlib.rcParams['font.family'] = 'serif'
-plt.rc('font', size=20)
+plt.rc('font', size=14)
 LATITUDE = 42
 LONGITUDE = 131
 
@@ -17,7 +17,7 @@ WOA_SALINITY = {5: 33.035, 10: 33.292, 15: 33.363, 20: 33.435, 25: 33.492, 30: 3
                 45: 33.712, 50: 33.761, 55: 33.830, 60: 33.868, 65: 33.902, 70: 33.929, 75: 33.954, 80: 33.983,
                 85: 33.995, 90: 34.003, 95: 34.012, 100: 34.018}
 
-FIXED_VALUES = {'S02': None, 'S04': 1024.5}
+FIXED_VALUES = {'S02': 1023.7, 'S04': 1023.4, 'S05': 1023.9, 'S07': 1023.4, 'S09': 1023.7}
 
 MINUTES = 20160
 
@@ -49,7 +49,7 @@ class SeaPoint:
         self.longitude = LONGITUDE
         self.height = mat[height_header][0][0]
         self.measure_count = len(self.temp_data[0])
-        # print(mat["cS09"])
+        self.name = list(mat.keys())[3]
 
         self.salinity = []
         for h in self.height_data:
@@ -58,6 +58,8 @@ class SeaPoint:
                     self.salinity.append(value)
                     break
         self.salinity = np.array(self.salinity)
+
+        print(self.height_data)
 
     def show_temp(self):
         fig, ax = plt.subplots(constrained_layout=True)
@@ -81,6 +83,7 @@ class SeaPoint:
         ax.set_ylabel("z, м")
         plt.show()
 
+
     def calc_density(self):
         self.height_data = -1 * self.height_data  # потому что вниз, а не вверх (иначе беды с давлением)
         pressure = gsw.p_from_z(self.height_data, self.latitude)
@@ -91,6 +94,8 @@ class SeaPoint:
             abs_sal_arr[i, :] = absolute_salinity[i]
         density_data = gsw.density.sigma0(abs_sal_arr, self.temp_data) + 1000
 
+        print(self.height_data[9])
+        print(density_data[0][9])
         return density_data
 
     def show_potential_density(self):
@@ -113,7 +118,8 @@ class SeaPoint:
         plt.show()
 
     def calc_isopic(self):
-        goal_p = 1024.5
+        goal_p = FIXED_VALUES[self.name]
+        #goal_p = 1024.5
         fig, ax = plt.subplots(constrained_layout=True)
         y = self.height_data
         dt = np.shape(self.temp_data)[1]  # число измерений
@@ -143,7 +149,7 @@ class SeaPoint:
         x = np.linspace(0, MINUTES, MINUTES * 6)
         isof = interpolate.interp1d(allpoint1, allpoint2, kind='linear')
         isopic = isof(x)
-        isopic = gaussian_filter(isopic, sigma=6)
+        isopic = gaussian_filter(isopic, sigma=10)
 
         # изопикна c дискретностью 10с
         return isopic
@@ -179,11 +185,13 @@ class SeaPoint:
                 maxes.append(isopic[i])
                 is_min = False
             elif isopic[i] > isopic[i - 1] and isopic[i] > isopic[i + 1] and not is_min:
-                maxes.pop()
+                try:
+                    maxes.pop()
+                except Exception:
+                    pass
                 maxes.append(isopic[i])
                 is_min = False
         waves = list()
-        for i in range(0, len(maxes) - 1):
+        for i in range(0, min(len(maxes), len(mins)) - 1):
             waves.append(Wave(mins[i], maxes[i], mins[i + 1], t_mins[i + 1] - t_mins[i]))
         return waves
-

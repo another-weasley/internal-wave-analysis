@@ -3,26 +3,34 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import statistics as stat
 import math
-import scipy.stats
+import scipy.stats as sst
 from scipy.interpolate import interp1d
+import pandas as pd
+import seaborn as sns
+from SeaPoint import MINUTES
+from scipy.interpolate import interp1d
+import scipy.fft as fft
 
+CURRENT_FILE = 'S04'
 def mylog(x, mu, sigma):
-    return np.exp(-(np.log(x) / mu)**2 / (2 * sigma**2)) / (x * sigma * np.sqrt(2 * np.pi))
+    return np.exp(-(np.log(x) - mu)**2 / (2 * sigma**2)) / (x * sigma * np.sqrt(2 * np.pi))
+
+def myPirson_old(observed, expected, N):
+    n = len(observed)
+    chi2_arr = [((observed[i] - expected[i])**2) / expected[i] for i in range(0, n)]
+    chi2 = sum(chi2_arr)
+    dof = n - 2 - 1  # число степеней свободы
+    chi_kr = sst.chi2.ppf(1-0.05, dof)
+    print('х_набл', chi2, 'хи_крит', chi_kr)
 
 
 def myPirson(observed, expected):
     n = len(observed)
-    chi2_arr = [((observed[i] - expected[i])**2) / expected[i] * n for i in range(0, n)]
+    chi2_arr = [((observed[i] - expected[i])**2) / expected[i] for i in range(0, n)]
     chi2 = sum(chi2_arr)
     dof = n - 2 - 1  # число степеней свободы
-    chi_kr = scipy.stats.chi2.ppf(1-0.05, dof)
+    chi_kr = sst.chi2.ppf(1-0.05, dof)
     print('х_набл', chi2, 'хи_крит', chi_kr)
-
-
-# def myexp(x, mu):
-#     x = np.array(x)
-#     l = 1 / mu
-#     return l*np.exp(-l*x)
 
 
 def normalise_data(data):
@@ -32,70 +40,116 @@ def normalise_data(data):
 
 class MyStat:
     def __init__(self, waves):
-        self.waves = [wave for wave in waves if wave.height() >= 0.1]
-        self.periods = [round(wave.T, ndigits=4) for wave in self.waves if wave.T > 2]
-        self.heights = [round(wave.height(), ndigits=10) for wave in self.waves]
+        self.waves = [wave for wave in waves if wave.height() >= 0.5]
+        self.periods = [round(wave.T) for wave in self.waves if wave.T > 0]
+        self.heights = [round(wave.height(), ndigits=2) for wave in self.waves]
+        self.slopes = [round(wave.slope(), ndigits=2) for wave in waves if wave.slope() > 0]
 
     def show_height_hist(self):
-        height_mean = stat.mean(self.heights)
-        height_deviation = stat.stdev(self.heights)
-        print('среднее высоты: ', height_mean, 'стандартное отклонение высоты: ', height_deviation)
-        norm_heights = normalise_data(self.heights)
+        mean = stat.mean(self.heights)
+        deviation = stat.stdev(self.heights)
+        print('среднее высоты', mean, 'стандартное отклонение высоты', deviation)
 
-        # гистограмма высоты
-        plt.hist(sorted(set(self.heights)), edgecolor='black', weights=norm_heights, bins=math.ceil(math.sqrt(len(self.heights))))
-        counts, bins = np.histogram(list(sorted(set(self.heights))), bins=math.ceil(math.sqrt(len(self.heights))), weights=norm_heights)
+        self.heights = np.array(self.heights)
+        n = len(self.heights)
+        df = pd.DataFrame({'h': self.heights, 'freq': np.zeros_like(self.heights)})
+        df = df.groupby(['h']).count()
+        df['rel_freq'] = df['freq'] / n
 
-        plt.title("Гистограмма относительных частот высоты волн")
-        plt.xlabel('H, м')
-        plt.ylabel('Частота, []')
+        x_data = list(df.index)
+        y_data = list(df['rel_freq'])
+        freq_data, y_data = df.to_numpy().transpose()
 
-        x = np.array(list(sorted(self.heights)))
-        last_bins = [bins[i+1] for i in range(0, len(bins)-1)]
-        bins = bins[:-1]
-        counts = counts + 0.0000001
-        # popt, _ = curve_fit(mylog, counts, last_bins)
+        # popt, _ = curve_fit(mylog, x_data, y_data)
         # print(popt)
         # m, s = popt[0], popt[1]
-        # plt.plot(x, mylog(np.array(x), m, s), color='red')
-        # dens = mylog(np.array(last_bins), 2.3, 1)
+        # dens = mylog(np.array(x_data), m, s)
+        # plt.hist(x_data, weights=y_data, bins=n, color='gray', edgecolor='gray')
+        # plt.plot(x_data, dens, color='red')
+        #
+        # myPirson(list(y_data), list(mylog(np.array(x_data), m, s)), int(sum(freq_data)))
+        #
+        # plt.title("Гистограмма относительных частот высоты волн")
+        # plt.xlabel('H, м')
+        # plt.ylabel('Частота, []')
         # plt.show()
 
-        plt.hist(sorted(set(self.heights)), edgecolor='black', weights=norm_heights,
-                 bins=math.ceil(math.sqrt(len(self.heights))))
-        densf = interp1d(bins, counts, kind='quadratic', bounds_error=False, fill_value='extrapolate')
-        new_x = np.linspace(min(self.heights), max(self.heights), 100)
-        dens = densf(new_x)
-        plt.plot(new_x, dens, color='orange')
-        popt, _ = curve_fit(mylog, new_x, dens)
-        print(popt)
-        m, s = popt[0], popt[1]
-        plt.plot(new_x, mylog(np.array(new_x), m, s), color='purple')
+        k = math.ceil(math.sqrt(n))
+        counts, bins = np.histogram(self.heights, bins=k, density=True)
+        bins = bins[:-1]
+        width_dict = {'S09': 0.2, 'S04': 0.0865}
+        plt.bar(bins, counts, width=width_dict[CURRENT_FILE], edgecolor='black')
+        shape, loc, scale = sst.lognorm.fit(self.heights)
+        print(f"sigma={shape}, mu={scale}")
+        dens = sst.lognorm.pdf(x_data, s=shape, loc=loc, scale=scale)
+        plt.plot(x_data, dens, color='r')
+
+        plt.title("Гистограмма высоты волн и ее аппроксимация логнормальным распределением")
+        plt.xlabel('H, м')
+        plt.ylabel('Частота, []')
         plt.show()
-        #myPirson(np.array(counts), np.array(dens))
+
+        myPirson(list(counts), list(sst.lognorm.pdf(bins, s=shape, loc=loc, scale=scale)))
 
     def show_period_hist(self):
-        period_mean = stat.mean(self.periods)
-        period_deviation = stat.stdev(self.periods)
-        print('среднее периода', period_mean, 'стандартное отклонение периода', period_deviation)
-        norm_periods = normalise_data(self.periods)
+        mean = stat.mean(self.periods)
+        deviation = stat.stdev(self.periods)
+        print('среднее периода', mean, 'стандартное отклонение периода', deviation)
 
-        # гистограмма периода
-        plt.hist(sorted(set(self.periods)), edgecolor='black', weights=norm_periods,
-                 bins=math.ceil(math.sqrt(len(self.periods))))
-        counts, bins = np.histogram(list(sorted(set(self.periods))), bins=math.ceil(math.sqrt(len(self.periods))),
-                                    weights=norm_periods)
-        x = np.array(list(sorted(self.periods)))
-        last_bins = [bins[i + 1] for i in range(0, len(bins) - 1)]
-        counts = counts + 0.0000001
-        popt, _ = curve_fit(mylog, counts, last_bins)
-        print(popt)
-        m, s = popt[0], popt[1]
-        plt.plot(x, mylog(np.array(x), m, s), color='red')
-        dens = mylog(np.array(last_bins), m, s)
-        myPirson(np.array(counts), np.array(dens))
+        self.periods = np.array(self.periods)
+        n = len(self.periods)
+        df = pd.DataFrame({'h': self.periods, 'freq': np.zeros_like(self.periods)})
+        df = df.groupby(['h']).count()
+        df['rel_freq'] = df['freq'] / n
+
+        x_data = list(df.index)
+        y_data = list(df['rel_freq'])
+        freq_data, y_data = df.to_numpy().transpose()
+
+        plt.bar(x_data, y_data, width=1, color='gray')
+        shape, loc, scale = sst.lognorm.fit(self.periods)
+        print(f"sigma={shape}, mu={scale}")
+        dens = sst.lognorm.pdf(x_data, s=shape, loc=loc, scale=scale)
+        plt.plot(x_data, dens, color='r')
+
+        myPirson(list(y_data), list(dens), len(self.periods))
 
         plt.title("Гистограмма относительных частот периода волн")
         plt.xlabel('T, минуты')
         plt.ylabel('Частота, []')
+        plt.show()
+
+    def show_slope_hist(self):
+        mean = stat.mean(self.slopes)
+        deviation = stat.stdev(self.slopes)
+        print('среднее высоты', mean, 'стандартное отклонение высоты', deviation)
+
+        self.slopes = np.array(self.slopes)
+        n = len(self.slopes)
+        df = pd.DataFrame({'h': self.slopes, 'freq': np.zeros_like(self.slopes)})
+        df = df.groupby(['h']).count()
+        df['rel_freq'] = df['freq'] / n
+
+        x_data = np.array(list(df.index)) + 0.00001
+        y_data = list(df['rel_freq'])
+        freq_data, y_data = df.to_numpy().transpose()
+
+        k = math.ceil(math.sqrt(n))
+        print(y_data)
+        counts, bins = np.histogram(self.slopes, bins=k, density=True)
+        bins = bins[:-1]
+        plt.bar(bins, counts, width=0.0055, edgecolor='black')
+        shape, loc, scale = sst.lognorm.fit(self.slopes)
+        print(f"sigma={shape}, mu={scale}")
+        dens = sst.lognorm.pdf(x_data, s=shape, loc=loc, scale=scale)
+        plt.plot(x_data, dens, color='r')
+        plt.show()
+
+        myPirson(list(y_data), list(dens), len(self.slopes))
+
+    def show_spectral(self, isopic):
+        x = np.linspace(0, MINUTES, MINUTES * 6)
+        furier = fft.rfft(isopic)
+        req = fft.rfftfreq(len(isopic))
+        plt.plot(req, abs(furier))
         plt.show()

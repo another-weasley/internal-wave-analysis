@@ -9,3 +9,6 @@ class Wave:
         real_min = (self.min1 + self.min2) / 2
         return self.max - real_min
 
+    def slope(self):
+        return self.height() / self.T
+
