@@ -59,8 +59,6 @@ class SeaPoint:
                     break
         self.salinity = np.array(self.salinity)
 
-        print(self.height_data)
-
     def show_temp(self):
         fig, ax = plt.subplots(constrained_layout=True)
         y = self.height_data
@@ -83,7 +81,6 @@ class SeaPoint:
         ax.set_ylabel("z, м")
         plt.show()
 
-
     def calc_density(self):
         self.height_data = -1 * self.height_data  # потому что вниз, а не вверх (иначе беды с давлением)
         pressure = gsw.p_from_z(self.height_data, self.latitude)
@@ -94,8 +91,6 @@ class SeaPoint:
             abs_sal_arr[i, :] = absolute_salinity[i]
         density_data = gsw.density.sigma0(abs_sal_arr, self.temp_data) + 1000
 
-        print(self.height_data[9])
-        print(density_data[0][9])
         return density_data
 
     def show_potential_density(self):
@@ -117,6 +112,7 @@ class SeaPoint:
         ax.set_ylabel("z, м")
         plt.show()
 
+        print(np.nanmin(density_data), np.nanmax(density_data))
     def calc_isopic(self):
         goal_p = FIXED_VALUES[self.name]
         #goal_p = 1024.5
@@ -156,6 +152,7 @@ class SeaPoint:
 
     def show_isopic(self):
         isopic = self.calc_isopic()
+        plt.gca().invert_yaxis()
         gauss_iso = gaussian_filter(isopic, sigma=6)
         x = np.linspace(0, MINUTES, MINUTES * 6)
         plt.plot(x, isopic)
@@ -163,6 +160,7 @@ class SeaPoint:
         plt.xlabel('t, минуты')
         plt.ylabel('z, м')
         plt.show()
+
         return isopic
 
     def find_waves(self, isopic):
@@ -194,4 +192,5 @@ class SeaPoint:
         waves = list()
         for i in range(0, min(len(maxes), len(mins)) - 1):
             waves.append(Wave(mins[i], maxes[i], mins[i + 1], t_mins[i + 1] - t_mins[i]))
+
         return waves
